@@ -1,6 +1,6 @@
 # qBittorrent 负载均衡器
 
-一个智能的 qBittorrent 多实例负载均衡器，能够监控 torrent 文件目录并自动将新的种子分配到最优的 qBittorrent 实例。
+一个智能的 qBittorrent 多实例负载均衡器，能够监控 torrent 文件目录并自动将新的种子分配到最优的 qBittorrent 实例。（这句吹牛逼的介绍是Cursor写的，整个项目都是我动嘴，Cursor动手）
 
 ## 功能特点
 
