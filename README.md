@@ -2,6 +2,14 @@
 
 一个智能的 qBittorrent 多实例负载均衡器，能够监控 torrent 文件目录并自动将新的种子分配到最优的 qBittorrent 实例。（这句吹牛逼的介绍是Cursor写的，整个项目都是我动嘴，Cursor动手）
 
+Autobrr 的Action设置为Watch Dir，内容填写种子保存的目录和命名规则，例如
+```
+/seed/[{{.Indexer}}]-{{.TorrentName}}-[{{ now | date_modify "+8h" | date "15-04-05" }}].torrent
+```
+{{.Indexer}}这个标记就是站点的名称，建议带上，脚本会读取，用于种子分类。
+
+{{ now | date_modify "+8h" | date "15-04-05" }}这个标记是为了记录种子下载时间，并且纠正到中国时间，如果不需要可以删掉
+
 ## 功能特点
 
 - 🔄 **智能负载均衡**: 根据可配置的算法（上传速度、下载速度或活跃下载数）选择最优实例
