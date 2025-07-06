@@ -4,36 +4,36 @@ qBittorrent Load Balancer
 监控torrent文件并智能分配到多个qBittorrent实例
 """
 
-import os
 import json
+import os
 import time
 import threading
 import logging
-import shutil
 from datetime import datetime, timedelta
-from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 from dataclasses import dataclass, field
-import re
 
 import qbittorrentapi
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
+from webhook_server import WebhookServer
 
 
-# 常量定义
+# 配置常量
 DEFAULT_CONFIG_FILE = "config.json"
+
+# 时间间隔常量（秒）
 DEFAULT_SLEEP_TIME = 1
-TASK_PROCESSOR_SLEEP = 5
+TASK_PROCESSOR_SLEEP = 3
 ERROR_RETRY_SLEEP = 5
+RECONNECT_INTERVAL = 180
+CONNECTION_TIMEOUT = 10
+
+# 网络和存储常量
 BYTES_TO_KB = 1024
 BYTES_TO_GB = 1024 ** 3
+MAX_RECONNECT_ATTEMPTS = 1
+
+# 种子汇报相关常量
 ANNOUNCE_WINDOW_TOLERANCE = 5
-FILE_SIZE_CHECK_INTERVAL = 0.3  # 文件大小检查间隔（秒）
-FILE_SIZE_CHECK_COUNT = 3  # 连续检查次数
-RECONNECT_INTERVAL = 180  # 重连检查间隔（秒）
-MAX_RECONNECT_ATTEMPTS = 1  # 每次最大重连尝试次数
-CONNECTION_TIMEOUT = 10  # 连接超时时间（秒）
 
 # 支持的排序键（所有均为小值优先）
 SUPPORTED_SORT_KEYS = {
@@ -48,65 +48,73 @@ logger = logging.getLogger(__name__)
 
 def setup_logging(log_dir=None):
     """设置日志配置，同时输出到控制台和文件"""
-    # 获取根logger并清理其handlers，避免basicConfig造成的重复
+    # 初始化logger
     root_logger = logging.getLogger()
     root_logger.handlers.clear()
     
-    # 创建应用logger
     app_logger = logging.getLogger(__name__)
-    app_logger.setLevel(logging.DEBUG)  # 设置为DEBUG级别，允许所有日志通过
-    
-    # 清除现有的handlers，避免重复
+    app_logger.setLevel(logging.DEBUG)
     app_logger.handlers.clear()
     
-    # 日志格式
+    # 设置基础格式
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     
-    # 控制台输出 - 只显示INFO及以上级别
+    # 添加控制台处理器
+    _add_console_handler(app_logger, formatter)
+    
+    # 添加文件处理器（如果指定了日志目录）
+    if log_dir:
+        _add_file_handlers(app_logger, formatter, log_dir)
+    
+    return app_logger
+
+
+def _add_console_handler(logger, formatter):
+    """添加控制台日志处理器"""
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
-    app_logger.addHandler(console_handler)
+    logger.addHandler(console_handler)
+
+
+def _add_file_handlers(logger, formatter, log_dir):
+    """添加文件日志处理器"""
+    try:
+        from logging.handlers import TimedRotatingFileHandler
+        
+        # 创建日志目录
+        os.makedirs(log_dir, exist_ok=True)
+        
+        # 主日志文件
+        main_log_path = os.path.join(log_dir, 'qbittorrent_loadbalancer.log')
+        file_handler = _create_rotating_handler(main_log_path, logging.DEBUG, formatter)
+        logger.addHandler(file_handler)
+        
+        # 错误日志文件
+        error_log_path = os.path.join(log_dir, 'qbittorrent_error.log')
+        error_handler = _create_rotating_handler(error_log_path, logging.ERROR, formatter)
+        logger.addHandler(error_handler)
+        
+        logger.info(f"日志文件将保存到：{log_dir}")
+        
+    except Exception as e:
+        print(f"警告: 无法设置文件日志: {e}")
+
+
+def _create_rotating_handler(filename, level, formatter):
+    """创建按日期轮转的日志处理器"""
+    from logging.handlers import TimedRotatingFileHandler
     
-    # 文件输出（只有指定了log_dir才设置）
-    if log_dir:
-        try:
-            # 创建日志目录
-            if not os.path.exists(log_dir):
-                os.makedirs(log_dir, exist_ok=True)
-                
-            # 文件处理器 - 按日期轮转
-            from logging.handlers import TimedRotatingFileHandler
-            file_handler = TimedRotatingFileHandler(
-                filename=os.path.join(log_dir, 'qbittorrent_loadbalancer.log'),
-                when='midnight',
-                interval=1,
-                backupCount=7,  # 保留7天的日志
-                encoding='utf-8'
-            )
-            file_handler.setLevel(logging.DEBUG)  # 文件中记录更详细的日志
-            file_handler.setFormatter(formatter)
-            app_logger.addHandler(file_handler)
-            
-            # 错误日志单独文件
-            error_handler = TimedRotatingFileHandler(
-                filename=os.path.join(log_dir, 'qbittorrent_error.log'),
-                when='midnight',
-                interval=1,
-                backupCount=7,
-                encoding='utf-8'
-            )
-            error_handler.setLevel(logging.ERROR)
-            error_handler.setFormatter(formatter)
-            app_logger.addHandler(error_handler)
-            
-            app_logger.info(f"日志文件将保存到：{log_dir}")
-            
-        except Exception as e:
-            # 如果文件日志设置失败，至少保证控制台日志正常
-            print(f"警告: 无法设置文件日志: {e}")
-    
-    return app_logger
+    handler = TimedRotatingFileHandler(
+        filename=filename,
+        when='midnight',
+        interval=1,
+        backupCount=7,
+        encoding='utf-8'
+    )
+    handler.setLevel(level)
+    handler.setFormatter(formatter)
+    return handler
 
 
 @dataclass
@@ -129,62 +137,13 @@ class InstanceInfo:
 
 @dataclass
 class PendingTorrent:
-    """待处理的torrent文件"""
-    filepath: str
-    created_time: datetime
+    """待处理的torrent"""
+    download_url: str
+    release_name: str
+    category: Optional[str] = None
     
 
-class TorrentWatcher(FileSystemEventHandler):
-    """Torrent文件监视器"""
-    
-    def __init__(self, torrent_manager: 'QBittorrentLoadBalancer') -> None:
-        self.torrent_manager = torrent_manager
-        
-    def on_created(self, event) -> None:
-        """处理文件创建事件"""
-        if not event.is_directory and event.src_path.endswith('.torrent'):
-            logger.info(f"发现新种子文件：{os.path.basename(event.src_path)}")
-            # 在后台线程中检查文件大小稳定性，避免阻塞监控
-            threading.Thread(
-                target=self._check_file_size_stability,
-                args=(event.src_path,),
-                daemon=True
-            ).start()
-            
-    def _check_file_size_stability(self, filepath: str) -> None:
-        """检查文件大小稳定性"""
-        try:
-            last_size = -1
-            stable_count = 0
-            
-            for _ in range(FILE_SIZE_CHECK_COUNT + 30):  # 多检查几次以确保稳定
-                if not os.path.exists(filepath):
-                    logger.debug(f"文件已不存在：{os.path.basename(filepath)}")
-                    return
-                    
-                try:
-                    current_size = os.path.getsize(filepath)
-                    
-                    if current_size == last_size:
-                        stable_count += 1
-                        if stable_count >= FILE_SIZE_CHECK_COUNT:
-                            logger.debug(f"文件大小已稳定：{current_size} bytes")
-                            self.torrent_manager.add_pending_torrent(filepath)
-                            return
-                    else:
-                        stable_count = 0
-                        last_size = current_size
-                        
-                except OSError:
-                    # 文件可能被锁定或不可访问，稍后重试
-                    pass
-                    
-                time.sleep(FILE_SIZE_CHECK_INTERVAL)
-                
-            logger.warning(f"文件大小检查超时，跳过：{os.path.basename(filepath)}")
-            
-        except Exception as e:
-            logger.error(f"检查文件大小时出错：{filepath}，错误：{e}")
+
 
 
 class QBittorrentLoadBalancer:
@@ -196,9 +155,13 @@ class QBittorrentLoadBalancer:
         self.pending_torrents: List[PendingTorrent] = []
         self.pending_torrents_lock = threading.Lock()
         self.instances_lock = threading.Lock()
+        self.announce_retry_counts = {} # 用于跟踪每个种子的汇报重试次数
         
         # 重新配置日志（支持文件输出）
         self._setup_logging()
+        
+        # 初始化webhook服务器
+        self.webhook_server: Optional[WebhookServer] = None
         
         self._setup_environment()
         
@@ -222,14 +185,11 @@ class QBittorrentLoadBalancer:
         # 验证配置
         self._validate_config()
         
-        # 创建torrent监视目录
-        os.makedirs(self.config['torrent_watch_dir'], exist_ok=True)
-        
         # 初始化qBittorrent实例
         self._init_instances()
         
-        # 启动文件监视器
-        self._start_file_watcher()
+        # 启动webhook服务器
+        self._start_webhook_server()
         
     def _validate_config(self) -> None:
         """验证配置文件的有效性"""
@@ -370,91 +330,69 @@ class QBittorrentLoadBalancer:
                 name=f"reconnect-{instance.name}"
             ).start()
         
-    def _start_file_watcher(self) -> None:
-        """启动文件监视器"""
-        event_handler = TorrentWatcher(self)
-        observer = Observer()
-        observer.schedule(event_handler, self.config['torrent_watch_dir'], recursive=False)
-        observer.start()
-        logger.info(f"开始监视目录：{self.config['torrent_watch_dir']}")
-        
-        # 扫描现有文件
-        self._scan_existing_torrents()
-        
-    def _scan_existing_torrents(self) -> None:
-        """扫描现有的torrent文件"""
-        watch_dir = Path(self.config['torrent_watch_dir'])
-        for torrent_file in watch_dir.glob("*.torrent"):
-            self.add_pending_torrent(str(torrent_file))
-            
-    def add_pending_torrent(self, filepath: str) -> None:
-        """添加待处理的torrent文件"""
+    def _start_webhook_server(self) -> None:
+        """启动webhook服务器"""
         try:
-            stat = os.stat(filepath)
-            created_time = datetime.fromtimestamp(stat.st_ctime)
-            current_time = datetime.now()
-            
-            # 检查文件创建时间是否在允许的时间窗内
-            max_age = timedelta(minutes=self.config['torrent_max_age_minutes'])
-            file_age = current_time - created_time
-            
-            if file_age > max_age:
-                logger.warning(f"跳过过期文件：{os.path.basename(filepath)}，"
-                             f"文件创建于 {file_age.total_seconds():.0f} 秒前，"
-                             f"超过 {max_age.total_seconds():.0f} 秒的时间限制")
-                return
-            
-            with self.pending_torrents_lock:
-                # 检查是否已存在
-                if not any(t.filepath == filepath for t in self.pending_torrents):
-                    torrent = PendingTorrent(filepath=filepath, created_time=created_time)
-                    self.pending_torrents.append(torrent)
-                    logger.info(f"添加待处理种子文件：{os.path.basename(filepath)}，"
-                               f"文件创建于 {file_age.total_seconds():.0f} 秒前")
-                else:
-                    logger.debug(f"文件已在待处理列表中：{os.path.basename(filepath)}")
+            self.webhook_server = WebhookServer(self, self.config)
+            self.webhook_server.start()
+            logger.info("Webhook服务器已启动")
         except Exception as e:
-            logger.error(f"添加种子文件失败：{filepath}，错误：{e}")
+            logger.error(f"启动webhook服务器失败: {e}")
+            raise
             
-    def _clean_old_torrents(self) -> None:
-        """清理超过时间限制的torrent文件"""
-        max_age = timedelta(minutes=self.config['torrent_max_age_minutes'])
-        current_time = datetime.now()
+    def add_pending_torrent(self, download_url: str, release_name: str, category: Optional[str] = None) -> None:
+        """添加待处理的torrent"""
+        if not download_url:
+            logger.error("必须提供download_url")
+            return
+            
+        if not release_name:
+            logger.error("必须提供release_name")
+            return
         
-        with self.pending_torrents_lock:
-            to_remove = []
-            for torrent in self.pending_torrents:
-                if current_time - torrent.created_time > max_age:
-                    try:
-                        os.remove(torrent.filepath)
-                        to_remove.append(torrent)
-                        logger.info(f"删除过期种子文件：{os.path.basename(torrent.filepath)}")
-                    except Exception as e:
-                        logger.error(f"删除文件失败：{torrent.filepath}，错误：{e}")
-                        
-            for torrent in to_remove:
-                self.pending_torrents.remove(torrent)
+        try:
+            with self.pending_torrents_lock:
+                # 检查是否已存在（使用URL作为唯一标识）
+                exists = any(t.download_url == download_url for t in self.pending_torrents)
+                
+                if not exists:
+                    torrent = PendingTorrent(
+                        download_url=download_url,
+                        release_name=release_name,
+                        category=category
+                    )
+                    self.pending_torrents.append(torrent)
+                    logger.info(f"添加待处理种子：{release_name}")
+                else:
+                    logger.debug(f"种子已在待处理列表中：{release_name}")
+                    
+        except Exception as e:
+            logger.error(f"添加种子失败：{release_name}，错误：{e}")
+            
+
                 
     def _update_instance_status(self) -> None:
         """更新所有实例的状态信息"""
         with self.instances_lock:
             for instance in self.instances:
-                if not instance.is_connected:
-                    continue
+                if instance.is_connected:
+                    self._update_single_instance(instance)
                     
-                try:
-                    # 单次API调用获取所有数据
-                    maindata = instance.client.sync_maindata()
+    def _update_single_instance(self, instance: InstanceInfo) -> None:
+        """更新单个实例的状态信息"""
+        try:
+            # 单次API调用获取所有数据
+            maindata = instance.client.sync_maindata()
+            
+            self._update_instance_metrics(instance, maindata)
+            self._process_instance_announces(instance, maindata)
+                       
+        except Exception as e:
+            logger.error(f"更新实例状态失败：{instance.name}，错误：{e}")
+            instance.is_connected = False
+            instance.last_update = datetime.now()
                     
-                    self._update_single_instance_status(instance, maindata)
-                    self._process_instance_announces(instance, maindata)
-                               
-                except Exception as e:
-                    logger.error(f"更新实例状态失败：{instance.name}，错误：{e}")
-                    instance.is_connected = False
-                    instance.last_update = datetime.now()  # 记录连接断开时间
-                    
-    def _update_single_instance_status(self, instance: InstanceInfo, maindata: dict) -> None:
+    def _update_instance_metrics(self, instance: InstanceInfo, maindata: dict) -> None:
         """使用sync/maindata的结果更新单个实例的状态信息"""
         server_state = maindata.get('server_state', {})
         
@@ -475,54 +413,91 @@ class QBittorrentLoadBalancer:
                    f"空闲空间={instance.free_space/BYTES_TO_GB:.1f}GB")
                    
     def _process_instance_announces(self, instance: InstanceInfo, maindata: dict) -> None:
-        """使用sync/maindata的结果处理实例的种子自动announce"""
+        """根据新逻辑处理实例的种子自动汇报"""
+        max_retries = self.config.get('max_announce_retries', 10)
+        error_keywords = ["unregistered", "not registered", "not found", "not exist"]
         current_time = datetime.now()
-        announce_delay = self.config['announce_delay_seconds']
-        announce_window_start = announce_delay - ANNOUNCE_WINDOW_TOLERANCE
-        announce_window_end = announce_delay + ANNOUNCE_WINDOW_TOLERANCE
-        
-        try:
-            all_torrents_items = maindata.get('torrents', {}).items()
-            for torrent_hash, torrent in all_torrents_items:
-                torrent_age = (current_time - datetime.fromtimestamp(torrent.added_on)).total_seconds()
-                if announce_window_start <= torrent_age <= announce_window_end:
-                    self._announce_torrent(instance, torrent, torrent_hash, torrent_age)
-        except Exception as e:
-            logger.warning(f"处理自动汇报时出错：{instance.name}，错误：{e}")
-            
-    def _announce_torrent(self, instance: InstanceInfo, torrent: any, torrent_hash: str, torrent_age: float) -> None:
-        """对单个种子执行announce"""
+
+        all_torrents_items = maindata.get('torrents', {}).items()
+
+        for torrent_hash, torrent in all_torrents_items:
+            age_seconds = (current_time - datetime.fromtimestamp(torrent.added_on)).total_seconds()
+            is_completed = torrent.progress == 1.0
+
+            # 条件1：如果种子已完成或添加超过2分钟，则确保其已从监控列表中移除，并跳过
+            if is_completed or age_seconds > 120 or age_seconds < 4:
+                if torrent_hash in self.announce_retry_counts:
+                    del self.announce_retry_counts[torrent_hash]
+                    if is_completed:
+                        reason = "已完成"
+                    elif age_seconds > 120:
+                        reason = "超过2分钟"
+                    else:
+                        reason = "添加时间小于4秒"
+                    logger.debug(f"停止汇报监控: {torrent.name} (原因: {reason})")
+                continue
+            # 条件2：如果种子未完成且未超过2分钟，则进行汇报检查
+            self.announce_retry_counts.setdefault(torrent_hash, 0)
+
+            if self.announce_retry_counts[torrent_hash] >= max_retries:
+                continue
+
+            # 检查汇报条件
+            needs_announce = False
+            reason = []
+
+            try:
+                # 1. 检查Tracker状态
+                trackers = instance.client.torrents_trackers(torrent_hash=torrent_hash)
+                
+                # Filter out non-HTTP trackers and special trackers like DHT, PEX, LSD
+                filtered_trackers = []
+                for t in trackers:
+                    # DHT, PEX, and LSD are peer sources, not trackers. The API returns them
+                    # in the tracker list, but their 'url' is just a name like 'dht'.
+                    if t.url.lower() in ('dht', 'pex', 'lsd'):
+                        continue
+                    if not t.url.startswith(('http://', 'https://')):
+                        continue
+                    filtered_trackers.append(t)
+
+                if not filtered_trackers:
+                    logging.info(f"[{instance['name']}] Announce check for '{torrent.name}': No valid HTTP trackers found, skipping.")
+                    continue
+
+                all_trackers_failed = all(t.status in [1, 3, 4] for t in filtered_trackers)
+                has_error_keyword = any(keyword in t.msg.lower() for t in filtered_trackers for keyword in error_keywords)
+
+                if all_trackers_failed:
+                    needs_announce = True
+                    reason.append("所有tracker状态异常")
+                if has_error_keyword:
+                    needs_announce = True
+                    reason.append("发现tracker错误信息")
+
+                # 2. 检查Peer数量
+                if torrent.num_leechs < 5:
+                    needs_announce = True
+                    reason.append(f"Peer数量不足({torrent.num_leechs})")
+
+                # 执行汇报
+                if needs_announce:
+                    self._announce_torrent(instance, torrent, torrent_hash, ", ".join(reason))
+
+            except Exception as e:
+                logger.warning(f"处理 {torrent.name} 的汇报时出错: {e}")
+
+    def _announce_torrent(self, instance: InstanceInfo, torrent: any, torrent_hash: str, reason: str) -> None:
+        """对单个种子执行announce并更新计数器"""
         try:
             instance.client.torrents_reannounce(torrent_hashes=torrent_hash)
-            logger.info(f"自动重新汇报种子：{torrent.name}（添加于 {torrent_age:.0f} 秒前），实例：{instance.name}")
+            self.announce_retry_counts[torrent_hash] += 1
+            logger.info(f"触发汇报: {torrent.name} (原因: {reason}) | "
+                        f"尝试次数: {self.announce_retry_counts[torrent_hash]}")
         except Exception as e:
-            logger.warning(f"重新汇报失败：{torrent.name}，错误：{e}")
+            logger.warning(f"汇报失败: {torrent.name}，错误: {e}")
                     
-    def _extract_category_from_filename(self, filepath: str) -> Optional[str]:
-        """从文件名中提取分类信息
-        
-        Args:
-            filepath: 文件路径
-            
-        Returns:
-            分类字符串或None（如果没有找到分类）
-            
-        Examples:
-            "[Movies]example.torrent" -> "Movies"
-            "[TV]show.torrent" -> "TV"
-            "normal.torrent" -> None
-        """
-        filename = os.path.basename(filepath)
-        
-        # 使用正则表达式匹配 [分类] 格式
-        match = re.match(r'^\[([^\]]+)\]', filename)
-        if match:
-            category = match.group(1)
-            logger.debug(f"从文件名提取分类：{filename} -> {category}")
-            return category
-        
-        return None
-        
+
     def _get_primary_sort_value(self, instance: InstanceInfo) -> float:
         """获取主要排序因素的值"""
         primary_sort_key = self.config.get('primary_sort_key', DEFAULT_PRIMARY_SORT_KEY)
@@ -565,76 +540,53 @@ class QBittorrentLoadBalancer:
             
             return selected
             
-    def _add_torrent_to_instance(self, instance: InstanceInfo, torrent_path: str) -> bool:
+    def _add_torrent_to_instance(self, instance: InstanceInfo, torrent: PendingTorrent) -> bool:
         """将torrent添加到指定实例"""
         try:
-            with open(torrent_path, 'rb') as f:
-                torrent_data = f.read()
+            add_params = {'urls': torrent.download_url}
             
-            # 从文件名中提取分类信息
-            category = self._extract_category_from_filename(torrent_path)
-            
-            # 构建添加种子的参数
-            add_params = {'torrent_files': torrent_data}
-            
-            # 如果提取到分类，则添加分类参数
-            if category:
-                add_params['category'] = category
-                logger.info(f"为种子设置分类：{os.path.basename(torrent_path)} -> {category}")
+            # 设置分类
+            if torrent.category:
+                add_params['category'] = torrent.category
+                logger.info(f"为种子设置分类：{torrent.release_name} -> {torrent.category}")
                 
             # 根据配置决定是否将种子添加为暂停状态（用于调试）
             if self.config.get('debug_add_stopped', False):
                 add_params['is_stopped'] = True
-                logger.info(f"调试模式开启，种子将以暂停状态添加：{os.path.basename(torrent_path)}")
+                logger.info(f"调试模式：种子将以暂停状态添加 - {torrent.release_name}")
 
             result = instance.client.torrents_add(**add_params)
             
             if result and result.startswith('Ok'):
                 instance.new_tasks_count += 1
-                log_msg = f"成功添加种子到实例 {instance.name}：{os.path.basename(torrent_path)}"
-                if category:
-                    log_msg += f"（分类：{category}）"
+                log_msg = f"成功添加种子到实例 {instance.name}：{torrent.release_name}"
+                if torrent.category:
+                    log_msg += f"（分类：{torrent.category}）"
                 logger.info(log_msg)
                 return True
             else:
-                logger.error(f"添加种子失败：{instance.name}，结果：{result}")
+                logger.error(f"添加种子失败 - 实例：{instance.name}，种子：{torrent.release_name}，结果：{result}")
                 return False
                 
         except Exception as e:
-            logger.error(f"添加种子到实例失败：{instance.name}，错误：{e}")
+            logger.error(f"添加种子到实例失败 - 实例：{instance.name}，种子：{torrent.release_name}，错误：{e}")
             return False
             
     def _process_torrents(self) -> None:
-        """处理待分配的torrent文件"""
+        """处理待分配的torrent URL"""
         with self.pending_torrents_lock:
             if not self.pending_torrents:
                 return
                 
-            # 直接处理所有待处理的torrents，无需额外过滤
-            # 因为过期的文件已经在_clean_old_torrents中被删除了
+            # 处理所有待处理的torrent URL
             for torrent in self.pending_torrents[:]:  # 使用切片避免修改列表时的问题
                 instance = self._select_best_instance()
                 if instance:
-                    if self._add_torrent_to_instance(instance, torrent.filepath):
+                    if self._add_torrent_to_instance(instance, torrent):
                         self.pending_torrents.remove(torrent)
-                        self._move_processed_torrent(torrent.filepath)
                 else:
                     logger.warning("没有可用的实例来分配新任务")
                     break
-                    
-
-        
-    def _move_processed_torrent(self, torrent_filepath: str) -> None:
-        """将处理完成的torrent文件移动到processed目录"""
-        try:
-            processed_dir = os.path.join(os.path.dirname(torrent_filepath), "processed")
-            os.makedirs(processed_dir, exist_ok=True)
-            destination = os.path.join(processed_dir, os.path.basename(torrent_filepath))
-            shutil.move(torrent_filepath, destination)
-            logger.debug(f"已移动处理完成的文件：{os.path.basename(torrent_filepath)}")
-        except Exception as e:
-            logger.error(f"移动处理完成的文件失败：{torrent_filepath}，错误：{e}")
-                    
 
     def _reset_task_counters(self) -> None:
         """重置任务计数器（每轮处理完成后）"""
@@ -663,11 +615,10 @@ class QBittorrentLoadBalancer:
         while True:
             try:
                 self._update_instance_status()
-                self._clean_old_torrents()
                 self._log_status_summary()
                 self._check_and_schedule_reconnects()
                               
-                time.sleep(self.config['status_update_interval'])
+                time.sleep(5) # 使用固定的5秒间隔
                 
             except Exception as e:
                 logger.error(f"状态更新线程错误：{e}")
@@ -684,7 +635,7 @@ class QBittorrentLoadBalancer:
                     pending_count = len(self.pending_torrents)
                 
                 if pending_count > 0:
-                    logger.debug(f"处理 {pending_count} 个待分配的种子文件")
+                    logger.debug(f"处理 {pending_count} 个待分配的种子")
                 
                 self._process_torrents()
                 self._reset_task_counters()
@@ -712,6 +663,9 @@ class QBittorrentLoadBalancer:
                 time.sleep(DEFAULT_SLEEP_TIME)
         except KeyboardInterrupt:
             logger.info("收到停止信号，正在关闭...")
+            if self.webhook_server:
+                self.webhook_server.stop()
+                logger.info("Webhook服务器已停止")
 
 
 def main() -> int:

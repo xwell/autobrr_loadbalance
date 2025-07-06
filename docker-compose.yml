@@ -3,11 +3,12 @@ services:
     image: qbittorrent-loadbalancer
     container_name: qbt-loadbalancer
     restart: unless-stopped
+    ports:
+      # Webhook端口映射
+      - "5000:5000"
     volumes:
       # 配置文件挂载
       - ./config.json:/app/config.json:rw
-      # torrent文件目录挂载
-      - ./torrents:/app/torrents:rw
       # 日志目录挂载
       - ./logs:/app/logs:rw
     environment:
@@ -17,11 +18,11 @@ services:
       # 可选：通过环境变量覆盖配置
       # - CONFIG_FILE=/app/config.json
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; exit(0 if os.path.exists('/app/config.json') else 1)"]
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 30s
     logging:
       driver: "json-file"
       options:
