@@ -44,36 +44,29 @@ check_config() {
 {
     "qbittorrent_instances": [
         {
-            "name": "server-1",
-            "url": "http://192.168.1.100:9090",
-            "username": "your_username",
+            "name": "qBittorrent-1",
+            "url": "http://192.168.1.100:8080",
+            "username": "admin",
             "password": "your_password"
         },
         {
-            "name": "server-2", 
-            "url": "http://192.168.1.101:9090",
-            "username": "your_username",
-            "password": "your_password"
-        },
-        {
-            "name": "server-3",
-            "url": "http://192.168.1.102:9090", 
-            "username": "your_username",
+            "name": "qBittorrent-2", 
+            "url": "http://192.168.1.101:8080",
+            "username": "admin",
             "password": "your_password"
         }
     ],
-    "torrent_watch_dir": "/app/torrents",
-    "torrent_max_age_minutes": 5,
-    "status_update_interval": 10,
+    "webhook_port": 5000,
+    "webhook_path": "/webhook/secure-a8f9c2e1-4b3d-9876-abcd-ef0123456789",
     "max_new_tasks_per_instance": 2,
-    "announce_delay_seconds": 60,
+    "max_announce_retries": 20,
     "reconnect_interval": 180,
     "max_reconnect_attempts": 1,
     "connection_timeout": 6,
     "primary_sort_key": "upload_speed",
-    "log_dir": "/app/logs",
+    "log_dir": "./logs",
     "debug_add_stopped": false
-}
+} 
 EOF
         print_message "已创建配置文件模板，请修改 config.json 中的 qBittorrent 实例信息！" $YELLOW
         print_message "配置完成后再次运行此脚本。" $YELLOW
