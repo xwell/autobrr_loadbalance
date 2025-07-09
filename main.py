@@ -22,7 +22,7 @@ DEFAULT_CONFIG_FILE = "config.json"
 
 # 时间间隔常量（秒）
 DEFAULT_SLEEP_TIME = 1
-TASK_PROCESSOR_SLEEP = 3
+TASK_PROCESSOR_SLEEP = 1
 ERROR_RETRY_SLEEP = 5
 RECONNECT_INTERVAL = 180
 CONNECTION_TIMEOUT = 10
@@ -141,9 +141,6 @@ class PendingTorrent:
     download_url: str
     release_name: str
     category: Optional[str] = None
-    
-
-
 
 
 class QBittorrentLoadBalancer:
@@ -413,8 +410,8 @@ class QBittorrentLoadBalancer:
                    f"空闲空间={instance.free_space/BYTES_TO_GB:.1f}GB")
                    
     def _process_instance_announces(self, instance: InstanceInfo, maindata: dict) -> None:
-        """根据新逻辑处理实例的种子自动汇报"""
-        max_retries = self.config.get('max_announce_retries', 10)
+        """处理实例的种子汇报检查"""
+        max_retries = self.config.get('max_announce_retries', 12)
         error_keywords = ["unregistered", "not registered", "not found", "not exist"]
         current_time = datetime.now()
 
@@ -425,7 +422,7 @@ class QBittorrentLoadBalancer:
             is_completed = torrent.progress == 1.0
 
             # 条件1：如果种子已完成或添加超过2分钟，则确保其已从监控列表中移除，并跳过
-            if is_completed or age_seconds > 120 or age_seconds < 4:
+            if is_completed or age_seconds > 130 or age_seconds < 3:
                 if torrent_hash in self.announce_retry_counts:
                     del self.announce_retry_counts[torrent_hash]
                     if is_completed:
@@ -436,64 +433,78 @@ class QBittorrentLoadBalancer:
                         reason = "添加时间小于4秒"
                     logger.debug(f"停止汇报监控: {torrent.name} (原因: {reason})")
                 continue
+                
             # 条件2：如果种子未完成且未超过2分钟，则进行汇报检查
-            self.announce_retry_counts.setdefault(torrent_hash, 0)
+            # 初始化或递增重试计数器
+            if torrent_hash not in self.announce_retry_counts:
+                self.announce_retry_counts[torrent_hash] = 0
+            
+            # 每次进入函数时递增计数器
+            self.announce_retry_counts[torrent_hash] += 1
+            current_retries = self.announce_retry_counts[torrent_hash]
+            
+            logger.debug(f"汇报检查: {torrent.name} (第{current_retries}次检查，最大{max_retries}次)")
 
-            if self.announce_retry_counts[torrent_hash] >= max_retries:
+            # 检查是否达到1分钟或者2分钟且种子仍未完成，如果是则强制汇报
+            if (current_retries == 12 or current_retries == 24) and not is_completed:
+                logger.info(f"达到特定次数({current_retries})且种子未完成，强制汇报: {torrent.name}")
+                self._announce_torrent(instance, torrent, torrent_hash, f"强制汇报(第{current_retries}次检查)")
                 continue
 
-            # 检查汇报条件
-            needs_announce = False
-            reason = []
+            # 如果还没到最大重试次数，继续正常的汇报条件检查
+            if current_retries < max_retries:
+                # 检查汇报条件
+                needs_announce = False
+                reason = []
 
-            try:
-                # 1. 检查Tracker状态
-                trackers = instance.client.torrents_trackers(torrent_hash=torrent_hash)
-                
-                # Filter out non-HTTP trackers and special trackers like DHT, PEX, LSD
-                filtered_trackers = []
-                for t in trackers:
-                    # DHT, PEX, and LSD are peer sources, not trackers. The API returns them
-                    # in the tracker list, but their 'url' is just a name like 'dht'.
-                    if t.url.lower() in ('dht', 'pex', 'lsd'):
+                try:
+                    # 1. 检查Tracker状态
+                    trackers = instance.client.torrents_trackers(torrent_hash=torrent_hash)
+                    
+                    # Filter out non-HTTP trackers and special trackers like DHT, PEX, LSD
+                    filtered_trackers = []
+                    for t in trackers:
+                        # DHT, PEX, and LSD are peer sources, not trackers. The API returns them
+                        # in the tracker list, but their 'url' is just a name like 'dht'.
+                        if t.url.lower() in ('dht', 'pex', 'lsd'):
+                            continue
+                        if not t.url.startswith(('http://', 'https://')):
+                            continue
+                        filtered_trackers.append(t)
+
+                    if not filtered_trackers:
+                        logger.info(f"[{instance.name}] Announce check for '{torrent.name}': No valid HTTP trackers found, skipping.")
                         continue
-                    if not t.url.startswith(('http://', 'https://')):
-                        continue
-                    filtered_trackers.append(t)
 
-                if not filtered_trackers:
-                    logging.info(f"[{instance['name']}] Announce check for '{torrent.name}': No valid HTTP trackers found, skipping.")
-                    continue
+                    all_trackers_failed = all(t.status in [1, 3, 4] for t in filtered_trackers)
+                    has_error_keyword = any(keyword in t.msg.lower() for t in filtered_trackers for keyword in error_keywords)
 
-                all_trackers_failed = all(t.status in [1, 3, 4] for t in filtered_trackers)
-                has_error_keyword = any(keyword in t.msg.lower() for t in filtered_trackers for keyword in error_keywords)
+                    if all_trackers_failed:
+                        needs_announce = True
+                        reason.append("所有tracker状态异常")
+                    if has_error_keyword:
+                        needs_announce = True
+                        reason.append("发现tracker错误信息")
 
-                if all_trackers_failed:
-                    needs_announce = True
-                    reason.append("所有tracker状态异常")
-                if has_error_keyword:
-                    needs_announce = True
-                    reason.append("发现tracker错误信息")
+                    # 2. 检查Peer数量
+                    if torrent.num_leechs < 4:
+                        needs_announce = True
+                        reason.append(f"Peer数量不足({torrent.num_leechs})")
 
-                # 2. 检查Peer数量
-                if torrent.num_leechs < 5:
-                    needs_announce = True
-                    reason.append(f"Peer数量不足({torrent.num_leechs})")
+                    # 执行汇报
+                    if needs_announce:
+                        self._announce_torrent(instance, torrent, torrent_hash, ", ".join(reason))
 
-                # 执行汇报
-                if needs_announce:
-                    self._announce_torrent(instance, torrent, torrent_hash, ", ".join(reason))
-
-            except Exception as e:
-                logger.warning(f"处理 {torrent.name} 的汇报时出错: {e}")
+                except Exception as e:
+                    logger.warning(f"处理 {torrent.name} 的汇报时出错: {e}")
 
     def _announce_torrent(self, instance: InstanceInfo, torrent: any, torrent_hash: str, reason: str) -> None:
-        """对单个种子执行announce并更新计数器"""
+        """对单个种子执行announce"""
         try:
             instance.client.torrents_reannounce(torrent_hashes=torrent_hash)
-            self.announce_retry_counts[torrent_hash] += 1
+            current_retries = self.announce_retry_counts.get(torrent_hash, 0)
             logger.info(f"触发汇报: {torrent.name} (原因: {reason}) | "
-                        f"尝试次数: {self.announce_retry_counts[torrent_hash]}")
+                        f"尝试次数: {current_retries}")
         except Exception as e:
             logger.warning(f"汇报失败: {torrent.name}，错误: {e}")
                     
