@@ -422,7 +422,7 @@ class QBittorrentLoadBalancer:
             is_completed = torrent.progress == 1.0
 
             # 条件1：如果种子已完成或添加超过2分钟，则确保其已从监控列表中移除，并跳过
-            if is_completed or age_seconds > 130 or age_seconds < 3:
+            if is_completed or age_seconds > 124 or age_seconds < 2:
                 if torrent_hash in self.announce_retry_counts:
                     del self.announce_retry_counts[torrent_hash]
                     if is_completed:
@@ -430,7 +430,7 @@ class QBittorrentLoadBalancer:
                     elif age_seconds > 120:
                         reason = "超过2分钟"
                     else:
-                        reason = "添加时间小于4秒"
+                        reason = "添加时间小于2秒"
                     logger.debug(f"停止汇报监控: {torrent.name} (原因: {reason})")
                 continue
                 
@@ -446,7 +446,7 @@ class QBittorrentLoadBalancer:
             logger.debug(f"汇报检查: {torrent.name} (第{current_retries}次检查，最大{max_retries}次)")
 
             # 检查是否达到1分钟或者2分钟且种子仍未完成，如果是则强制汇报
-            if (current_retries == 12 or current_retries == 24) and not is_completed:
+            if (current_retries == 30 or current_retries == 60) and not is_completed:
                 logger.info(f"达到特定次数({current_retries})且种子未完成，强制汇报: {torrent.name}")
                 self._announce_torrent(instance, torrent, torrent_hash, f"强制汇报(第{current_retries}次检查)")
                 continue
@@ -629,7 +629,11 @@ class QBittorrentLoadBalancer:
                 self._log_status_summary()
                 self._check_and_schedule_reconnects()
                               
-                time.sleep(5) # 使用固定的5秒间隔
+                # 根据是否有待重试的汇报任务来调整检查频率
+                if self.announce_retry_counts:
+                    time.sleep(2)  # 有待重试任务时加快检查频率
+                else:
+                    time.sleep(4)  # 正常情况下的检查频率
                 
             except Exception as e:
                 logger.error(f"状态更新线程错误：{e}")
