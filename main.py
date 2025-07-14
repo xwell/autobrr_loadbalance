@@ -377,15 +377,26 @@ class QBittorrentLoadBalancer:
                     
     def _update_single_instance(self, instance: InstanceInfo) -> None:
         """更新单个实例的状态信息"""
-        try:
-            # 单次API调用获取所有数据
+        def _try_update_instance():
+            """尝试更新实例状态的内部函数"""
             maindata = instance.client.sync_maindata()
-            
             self._update_instance_metrics(instance, maindata)
             self._process_instance_announces(instance, maindata)
-                       
+        
+        # 第一次尝试
+        try:
+            _try_update_instance()
+            return
         except Exception as e:
-            logger.error(f"更新实例状态失败：{instance.name}，错误：{e}")
+            logger.warning(f"更新实例状态失败：{instance.name}，错误：{e}，等待5秒后重试")
+            time.sleep(5)
+        
+        # 第二次尝试
+        try:
+            _try_update_instance()
+            logger.info(f"实例 {instance.name} 重试成功")
+        except Exception as e2:
+            logger.error(f"重试后仍然失败：{instance.name}，错误：{e2}，标记为断开连接")
             instance.is_connected = False
             instance.last_update = datetime.now()
                     
