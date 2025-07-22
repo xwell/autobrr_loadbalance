@@ -9,6 +9,7 @@ import os
 import time
 import threading
 import logging
+import csv
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from dataclasses import dataclass, field
@@ -131,6 +132,7 @@ class InstanceInfo:
     active_downloads: int = 0
     free_space: int = 0  # bytes
     new_tasks_count: int = 0  # 新分配的任务数
+    total_added_tasks_count: int = 0  # 已添加的总任务计数
     last_update: datetime = field(default_factory=datetime.now)
     is_reconnecting: bool = False  # 是否正在重连中
 
@@ -196,7 +198,7 @@ class QBittorrentLoadBalancer:
             logger.warning(f"不支持的排序键：{primary_sort_key}，使用默认值：{DEFAULT_PRIMARY_SORT_KEY}")
             self.config['primary_sort_key'] = DEFAULT_PRIMARY_SORT_KEY
         else:
-            logger.info(f"使用排序策略：主要因素={SUPPORTED_SORT_KEYS[primary_sort_key]}，次要因素=空闲空间")
+            logger.info(f"使用排序策略：主要因素={SUPPORTED_SORT_KEYS[primary_sort_key]}，次要因素=累计添加任务数，第三因素=空闲空间")
             
     def _load_config(self, config_file: str) -> dict:
         """加载配置文件"""
@@ -382,6 +384,8 @@ class QBittorrentLoadBalancer:
             maindata = instance.client.sync_maindata()
             self._update_instance_metrics(instance, maindata)
             self._process_instance_announces(instance, maindata)
+            #self._add_peers_for_retry_torrents(instance, maindata)
+            #self._save_torrent_peers_to_csv(instance, maindata)
         
         # 第一次尝试
         try:
@@ -433,7 +437,7 @@ class QBittorrentLoadBalancer:
             is_completed = torrent.progress == 1.0
 
             # 条件1：如果种子已完成或添加超过2分钟，则确保其已从监控列表中移除，并跳过
-            if is_completed or age_seconds > 124 or age_seconds < 2:
+            if (is_completed and age_seconds > 60) or age_seconds > 130 or age_seconds < 2:
                 if torrent_hash in self.announce_retry_counts:
                     del self.announce_retry_counts[torrent_hash]
                     if is_completed:
@@ -498,7 +502,7 @@ class QBittorrentLoadBalancer:
                         reason.append("发现tracker错误信息")
 
                     # 2. 检查Peer数量
-                    if torrent.num_leechs < 4:
+                    if torrent.progress < 0.8 and torrent.num_leechs < 3:
                         needs_announce = True
                         reason.append(f"Peer数量不足({torrent.num_leechs})")
 
@@ -518,7 +522,87 @@ class QBittorrentLoadBalancer:
                         f"尝试次数: {current_retries}")
         except Exception as e:
             logger.warning(f"汇报失败: {torrent.name}，错误: {e}")
+    
+    def _save_torrent_peers_to_csv(self, instance: InstanceInfo, maindata: dict) -> None:
+        """保存种子peer列表到CSV文件"""
+        all_torrents_items = maindata.get('torrents', {}).items()
+        
+        for torrent_hash, torrent in all_torrents_items:
+            # 检查种子是否在announce_retry_counts中
+            if torrent_hash not in self.announce_retry_counts:
+                continue
+                
+            # 检查种子状态是否为正在下载中
+            if torrent.state != 'downloading':
+                continue
+            
+            # 检查./logs目录中是否已有以此hash命名的csv文件
+            csv_filename = f"./logs/{torrent_hash}.csv"
+            if os.path.exists(csv_filename):
+                continue
+                
+            try:
+                # 获取种子的peer列表
+                # 使用qbittorrent-api库提供的官方方法
+                peers_data = instance.client.sync_torrent_peers(torrent_hash=torrent_hash)
+                peers = peers_data.get('peers', {})
+                
+                if not peers:
+                    logger.debug(f"种子 {torrent.name} 没有peer连接")
+                    continue
+                
+                # 确保logs目录存在
+                os.makedirs('./logs', exist_ok=True)
+                
+                # 保存peer信息到CSV文件
+                with open(csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
+                    fieldnames = ['ip', 'port', 'client', 'country', 'downloaded', 'uploaded', 'progress']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                     
+                    # 写入表头
+                    writer.writeheader()
+                    
+                    # 写入peer数据
+                    for peer_id, peer_info in peers.items():
+                        writer.writerow({
+                            'ip': peer_info.get('ip', ''),
+                            'port': peer_info.get('port', ''),
+                            'client': peer_info.get('client', ''),
+                            'country': peer_info.get('country', ''),
+                            'downloaded': peer_info.get('downloaded', 0),
+                            'uploaded': peer_info.get('uploaded', 0),
+                            'progress': peer_info.get('progress', 0)
+                        })
+                
+                logger.info(f"已保存种子 {torrent.name} 的peer列表到 {csv_filename}，共 {len(peers)} 个peer")
+                
+            except Exception as e:
+                logger.warning(f"保存种子 {torrent.name} 的peer列表失败: {e}")
+                    
+
+    def _add_peers_for_retry_torrents(self, instance: InstanceInfo, maindata: dict) -> None:
+        """为重试次数为1的种子添加指定的peer"""
+        try:
+            # 预定义的peer列表
+            peers_to_add = ["213.227.151.211:30957", "45.87.251.103:58929"]
+            
+            # 获取当前实例的种子列表
+            torrents_in_instance = maindata.get('torrents', {})
+            
+            # 只处理当前实例中存在且重试次数为1的种子
+            for torrent_hash, retry_count in self.announce_retry_counts.items():
+                # 检查种子是否在当前实例中存在且重试次数为1
+                if retry_count == 1 and torrent_hash in torrents_in_instance:
+                    try:
+                        # 为种子添加peer
+                        instance.client.torrents_add_peers(torrent_hashes=torrent_hash, peers=peers_to_add)
+                        logger.info(f"已为种子 {torrent_hash} 添加peer: {', '.join(peers_to_add)} (实例: {instance.name})")
+                    except Exception as e:
+                        logger.warning(f"为种子 {torrent_hash} 添加peer失败：{e} (实例: {instance.name})")
+                        
+        except Exception as e:
+            logger.error(f"添加peer过程中发生错误：{instance.name}，错误：{e}")
+
 
     def _get_primary_sort_value(self, instance: InstanceInfo) -> float:
         """获取主要排序因素的值"""
@@ -540,16 +624,18 @@ class QBittorrentLoadBalancer:
             available_instances = [
                 instance for instance in self.instances 
                 if instance.is_connected and 
-                instance.new_tasks_count < self.config['max_new_tasks_per_instance']
+                instance.new_tasks_count < self.config['max_new_tasks_per_instance'] and
+                instance.free_space > 21 * BYTES_TO_GB
             ]
             
             if not available_instances:
                 return None
                 
-            # 按可配置算法排序：主要因素（小值优先），次要因素是硬盘空间（大值优先）
+            # 按可配置算法排序：主要因素（小值优先），次要因素是任务计数（小值优先），第三因素是硬盘空间（大值优先）
             available_instances.sort(key=lambda x: (
                 self._get_primary_sort_value(x),  # 主要因素：小值优先
-                -x.free_space  # 次要因素：大值优先（使用负号）
+                x.total_added_tasks_count,        # 次要因素：已添加任务计数小的优先
+                -x.free_space                     # 第三因素：硬盘空间大的优先（使用负号）
             ))
             
             selected = available_instances[0]
@@ -558,6 +644,7 @@ class QBittorrentLoadBalancer:
             
             logger.debug(f"选择实例 {selected.name}：" 
                         f"{SUPPORTED_SORT_KEYS[primary_sort_key]}={primary_value:.1f}，"
+                        f"已添加任务数={selected.total_added_tasks_count}，"
                         f"空闲空间={selected.free_space/BYTES_TO_GB:.1f}GB")
             
             return selected
@@ -581,6 +668,7 @@ class QBittorrentLoadBalancer:
             
             if result and result.startswith('Ok'):
                 instance.new_tasks_count += 1
+                instance.total_added_tasks_count += 1  # 增加累计任务计数
                 log_msg = f"成功添加种子到实例 {instance.name}：{torrent.release_name}"
                 if torrent.category:
                     log_msg += f"（分类：{torrent.category}）"
