@@ -5,7 +5,7 @@
             "url": "http://192.168.1.100:8080",
             "username": "admin",
             "password": "your_password",
-            "traffic_check_url": "http://192.168.1.100:8888/api/traffic",
+            "traffic_check_url": "",
             "traffic_limit": 25165824
         },
         {
@@ -13,7 +13,7 @@
             "url": "http://192.168.1.101:8080",
             "username": "admin",
             "password": "your_password",
-            "traffic_check_url": "http://192.168.1.101:8888/api/traffic",
+            "traffic_check_url": "",
             "traffic_limit": 25165824
         }
     ],
@@ -27,5 +27,5 @@
     "primary_sort_key": "upload_speed",
     "log_dir": "./logs",
     "debug_add_stopped": false,
-    "_comment": "traffic_limit 单位为MB，系统内部会自动转换为GB进行计算"
+    "_comment": "traffic_check_url不要乱填，默认留空了；traffic_limit 单位为MB，系统内部会自动转换为GB进行计算"
 } 
