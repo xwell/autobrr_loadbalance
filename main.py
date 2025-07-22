@@ -10,6 +10,7 @@ import time
 import threading
 import logging
 import csv
+import requests
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from dataclasses import dataclass, field
@@ -133,6 +134,10 @@ class InstanceInfo:
     free_space: int = 0  # bytes
     new_tasks_count: int = 0  # 新分配的任务数
     total_added_tasks_count: int = 0  # 已添加的总任务计数
+    success_metrics_count: int = 0  # 成功获取统计信息的次数
+    traffic_out: float = 0.0  # 出站流量 (GB)
+    traffic_limit: float = 0.0  # 流量限制 (GB)
+    traffic_check_url: str = ""  # 流量检查URL
     last_update: datetime = field(default_factory=datetime.now)
     is_reconnecting: bool = False  # 是否正在重连中
 
@@ -221,11 +226,21 @@ class QBittorrentLoadBalancer:
             
     def _create_instance_from_config(self, config: Dict[str, str]) -> InstanceInfo:
         """根据配置创建实例信息对象"""
+        # 安全地转换流量限制值
+        try:
+            traffic_limit_mb = config.get('traffic_limit', 0.0)
+            traffic_limit_gb = float(traffic_limit_mb) / 1024
+        except (ValueError, TypeError) as e:
+            logger.warning(f"实例 {config.get('name', 'Unknown')} 流量限制值转换失败：{e}，设置为0")
+            traffic_limit_gb = 0.0
+            
         return InstanceInfo(
             name=config['name'],
             url=config['url'],
             username=config['username'],
-            password=config['password']
+            password=config['password'],
+            traffic_check_url=config.get('traffic_check_url', ''),
+            traffic_limit=traffic_limit_gb
         )
         
     def _connect_instance(self, instance: InstanceInfo) -> None:
@@ -418,11 +433,60 @@ class QBittorrentLoadBalancer:
         instance.active_downloads = len([t for t in all_torrents if t.state == 'downloading'])
         
         instance.last_update = datetime.now()
+        instance.success_metrics_count += 1  # 成功获取统计信息，计数器加1
+        
+        # 每30次成功更新时检查一次流量信息
+        if instance.success_metrics_count % 30 == 0:
+            self._check_instance_traffic(instance)
+        
         logger.debug(f"更新实例状态 {instance.name}：" 
                    f"上传={instance.upload_speed:.1f}KB/s，"
                    f"下载={instance.download_speed:.1f}KB/s，"
                    f"活跃下载={instance.active_downloads}，"
-                   f"空闲空间={instance.free_space/BYTES_TO_GB:.1f}GB")
+                   f"空闲空间={instance.free_space/BYTES_TO_GB:.1f}GB，"
+                   f"成功更新次数={instance.success_metrics_count}")
+                   
+    def _check_instance_traffic(self, instance: InstanceInfo) -> None:
+        """检查实例的流量信息"""
+        if not instance.traffic_check_url:
+            return
+            
+        try:
+            response = requests.get(instance.traffic_check_url, timeout=5)
+            response.raise_for_status()
+            traffic_data = response.json()
+            
+            # 获取出站流量，从MB转换为GB
+            try:
+                traffic_out_mb = traffic_data.get('out', 0.0)
+                instance.traffic_out = float(traffic_out_mb) / 1024
+            except (ValueError, TypeError) as e:
+                logger.warning(f"实例 {instance.name} 流量数据转换失败：{e}，设置为0")
+                instance.traffic_out = 0.0
+            
+            logger.debug(f"更新实例 {instance.name} 流量信息：出站流量={instance.traffic_out:.2f}GB，限制={instance.traffic_limit:.2f}GB")
+            
+        except Exception as e:
+            logger.warning(f"获取实例 {instance.name} 流量信息失败：{e}")
+            instance.traffic_out = 0.0
+    
+    def _is_traffic_within_limit(self, instance: InstanceInfo) -> bool:
+        """检查实例的流量是否在限制范围内"""
+        # 如果出站流量为0（未检查或检查失败），认为流量未超出
+        if instance.traffic_out == 0.0:
+            return True
+        
+        # 如果没有设置流量限制，认为流量未超出
+        if instance.traffic_limit == 0.0:
+            return True
+            
+        # 比较出站流量和流量限制
+        within_limit = instance.traffic_out < instance.traffic_limit
+        
+        if not within_limit:
+            logger.warning(f"实例 {instance.name} 流量超限：出站流量={instance.traffic_out:.2f}GB，限制={instance.traffic_limit:.2f}GB")
+        
+        return within_limit
                    
     def _process_instance_announces(self, instance: InstanceInfo, maindata: dict) -> None:
         """处理实例的种子汇报检查"""
@@ -625,7 +689,8 @@ class QBittorrentLoadBalancer:
                 instance for instance in self.instances 
                 if instance.is_connected and 
                 instance.new_tasks_count < self.config['max_new_tasks_per_instance'] and
-                instance.free_space > 21 * BYTES_TO_GB
+                instance.free_space > 21 * BYTES_TO_GB and
+                self._is_traffic_within_limit(instance)
             ]
             
             if not available_instances:
@@ -645,7 +710,8 @@ class QBittorrentLoadBalancer:
             logger.debug(f"选择实例 {selected.name}：" 
                         f"{SUPPORTED_SORT_KEYS[primary_sort_key]}={primary_value:.1f}，"
                         f"已添加任务数={selected.total_added_tasks_count}，"
-                        f"空闲空间={selected.free_space/BYTES_TO_GB:.1f}GB")
+                        f"空闲空间={selected.free_space/BYTES_TO_GB:.1f}GB，"
+                        f"流量={selected.traffic_out:.2f}/{selected.traffic_limit:.2f}GB")
             
             return selected
             
