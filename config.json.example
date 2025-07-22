@@ -27,5 +27,5 @@
     "primary_sort_key": "upload_speed",
     "log_dir": "./logs",
     "debug_add_stopped": false,
-    "_comment": "traffic_check_url不要乱填，默认留空了；traffic_limit 单位为MB，系统内部会自动转换为GB进行计算"
+    "_comment": "注意，traffic_check_url需要配合其他工具使用，默认留空，不检查流量；traffic_limit 单位为MB"
 } 
