@@ -47,25 +47,30 @@ check_config() {
             "name": "qBittorrent-1",
             "url": "http://192.168.1.100:8080",
             "username": "admin",
-            "password": "your_password"
+            "password": "your_password",
+            "traffic_check_url": "",
+            "traffic_limit": 25165824
         },
         {
             "name": "qBittorrent-2", 
             "url": "http://192.168.1.101:8080",
             "username": "admin",
-            "password": "your_password"
+            "password": "your_password",
+            "traffic_check_url": "",
+            "traffic_limit": 25165824
         }
     ],
     "webhook_port": 5000,
     "webhook_path": "/webhook/secure-a8f9c2e1-4b3d-9876-abcd-ef0123456789",
     "max_new_tasks_per_instance": 2,
-    "max_announce_retries": 20,
-    "reconnect_interval": 180,
+    "max_announce_retries": 30,
+    "reconnect_interval": 120,
     "max_reconnect_attempts": 1,
     "connection_timeout": 6,
     "primary_sort_key": "upload_speed",
     "log_dir": "./logs",
-    "debug_add_stopped": false
+    "debug_add_stopped": false,
+    "_comment": "注意，traffic_check_url需要配合其他工具使用，默认留空，不检查流量；traffic_limit 单位为MB"
 } 
 EOF
         print_message "已创建配置文件模板，请修改 config.json 中的 qBittorrent 实例信息！" $YELLOW

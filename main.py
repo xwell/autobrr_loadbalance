@@ -439,13 +439,15 @@ class QBittorrentLoadBalancer:
         if instance.success_metrics_count % 30 == 0:
             self._check_instance_traffic(instance)
         
-        logger.debug(f"更新实例状态 {instance.name}：" 
+        logger.debug(f"实例 {instance.name}：" 
                    f"上传={instance.upload_speed:.1f}KB/s，"
                    f"下载={instance.download_speed:.1f}KB/s，"
                    f"活跃下载={instance.active_downloads}，"
-                   f"空闲空间={instance.free_space/BYTES_TO_GB:.1f}GB，"
-                   f"成功更新次数={instance.success_metrics_count}")
-                   
+                   f"空间={instance.free_space/BYTES_TO_GB:.1f}GB，"
+                   f"更新={instance.success_metrics_count}，"
+                   f"历史任务={instance.total_added_tasks_count}")
+
+
     def _check_instance_traffic(self, instance: InstanceInfo) -> None:
         """检查实例的流量信息"""
         if not instance.traffic_check_url:
