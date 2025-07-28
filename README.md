@@ -46,6 +46,8 @@ chmod +x docker-start.sh
   "download_url": "{{.TorrentUrl}}"
 }
 ```
+图示：
+![PixPin_2025-07-28_08-41-20.png](https://image.dooo.ng/c/2025/07/28/6886c78fc7448.webp)
 
 ### 本地运行
 
