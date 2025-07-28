@@ -64,7 +64,7 @@ check_config() {
     "webhook_path": "/webhook/secure-a8f9c2e1-4b3d-9876-abcd-ef0123456789",
     "max_new_tasks_per_instance": 2,
     "max_announce_retries": 30,
-    "fast_announce_interval": 4,
+    "fast_announce_interval": 3,
     "reconnect_interval": 120,
     "max_reconnect_attempts": 1,
     "connection_timeout": 6,
