@@ -221,10 +221,10 @@ class QBittorrentLoadBalancer:
     def _set_config_defaults(self) -> None:
         """设置配置默认值和验证"""
         # 设置快速汇报间隔默认值，并限制在2-10秒范围内
-        fast_interval = self.config.get('fast_announce_interval', 4)
+        fast_interval = self.config.get('fast_announce_interval', 3)
         if not isinstance(fast_interval, (int, float)) or fast_interval < 2 or fast_interval > 10:
             logger.warning(f"fast_announce_interval 值无效 ({fast_interval})，必须在2-10秒范围内，使用默认值4秒")
-            fast_interval = 4
+            fast_interval = 3
         self.config['fast_announce_interval'] = fast_interval
         
         logger.info(f"状态更新间隔配置：快速检查={fast_interval}秒，正常检查={fast_interval * 2}秒")
@@ -539,7 +539,7 @@ class QBittorrentLoadBalancer:
             logger.debug(f"汇报检查: {torrent.name} (第{current_retries}次检查，最大{max_retries}次)")
 
             # 检查是否达到1分钟或者2分钟且种子仍未完成，如果是则强制汇报
-            fast_interval = self.config.get('fast_announce_interval', 4)
+            fast_interval = self.config.get('fast_announce_interval', 3)
             first_force_announce = int(60 / fast_interval)
             second_force_announce = int(120 / fast_interval)
             if (current_retries == first_force_announce or current_retries == second_force_announce) and not is_completed:
