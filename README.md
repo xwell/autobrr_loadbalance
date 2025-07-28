@@ -75,7 +75,7 @@ python run.py
 | `primary_sort_key` | `upload_speed` | 负载均衡策略：`upload_speed`/`download_speed`/`active_downloads` |
 | `max_new_tasks_per_instance` | `2` | 单实例单轮最大新任务数 |
 | `max_announce_retries` | `30` | 种子最大汇报重试次数 |
-| `fast_announce_interval` | `4` | 快速检查间隔（2-10秒），正常检查为2倍该值 |
+| `fast_announce_interval` | `3` | 快速检查间隔（2-10秒），正常检查为2倍该值 |
 | `connection_timeout` | `6` | 连接超时时间（秒）|
 | `debug_add_stopped` | `false` | 调试模式：新种子暂停添加 |
 
@@ -85,45 +85,12 @@ python run.py
 |------|------|
 | `traffic_check_url` | 流量检查 API URL |
 | `traffic_limit` | 流量限制（MB），超限实例会被跳过 |
+| `reserved_space` | 需要保留的空闲空间（MB），低于此值的实例会被跳过 |
 
-流量 API 需返回格式：`{"in":1421.72,"out":11777.19,"start_date":"2025-07-19"}`
+流量 API 需返回格式, in和out表示入站和出站流量，单位为MB：`{"in":1421.72,"out":11777.19,"start_date":"2025-07-19"}`
 
 ## 配置示例
-
-```json
-{
-    "qbittorrent_instances": [
-        {
-            "name": "qBittorrent-1",
-            "url": "http://192.168.1.100:8080",
-            "username": "admin",
-            "password": "your_password",
-            "traffic_check_url": "",
-            "traffic_limit": 0
-        },
-        {
-            "name": "qBittorrent-2", 
-            "url": "http://192.168.1.101:8080",
-            "username": "admin",
-            "password": "your_password",
-            "traffic_check_url": "",
-            "traffic_limit": 0
-        }
-    ],
-    "webhook_port": 5000,
-    "webhook_path": "/webhook/secure-a8f9c2e1-4b3d-9876-abcd-ef0123456789",
-    "max_new_tasks_per_instance": 2,
-    "max_announce_retries": 30,
-    "fast_announce_interval": 3,
-    "reconnect_interval": 120,
-    "max_reconnect_attempts": 1,
-    "connection_timeout": 6,
-    "primary_sort_key": "upload_speed",
-    "log_dir": "./logs",
-    "debug_add_stopped": false,
-    "_comment": "注意，traffic_check_url需要配合其他工具使用，默认留空，不检查流量；traffic_limit 单位为MB"
-} 
-```
+请参考config.json.example
 
 ## 安全说明
 

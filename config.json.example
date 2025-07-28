@@ -6,15 +6,17 @@
             "username": "admin",
             "password": "your_password",
             "traffic_check_url": "",
-            "traffic_limit": 0
+            "traffic_limit": 0,
+            "reserved_space": 21504
         },
         {
-            "name": "qBittorrent-2", 
+            "name": "qBittorrent-2",
             "url": "http://192.168.1.101:8080",
             "username": "admin",
             "password": "your_password",
             "traffic_check_url": "",
-            "traffic_limit": 0
+            "traffic_limit": 0,
+            "reserved_space": 21504
         }
     ],
     "webhook_port": 5000,
@@ -28,5 +30,5 @@
     "primary_sort_key": "upload_speed",
     "log_dir": "./logs",
     "debug_add_stopped": false,
-    "_comment": "注意，traffic_check_url需要配合其他工具使用，默认留空，不检查流量；traffic_limit 单位为MB"
-} 
+    "_comment": "注意，traffic_check_url需要配合其他工具使用，默认留空，不检查流量；traffic_limit 和 reserved_space 单位为MB"
+}
