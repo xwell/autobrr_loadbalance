@@ -75,6 +75,7 @@ python run.py
 | `primary_sort_key` | `upload_speed` | 负载均衡策略：`upload_speed`/`download_speed`/`active_downloads` |
 | `max_new_tasks_per_instance` | `2` | 单实例单轮最大新任务数 |
 | `max_announce_retries` | `30` | 种子最大汇报重试次数 |
+| `fast_announce_interval` | `4` | 快速检查间隔（2-10秒），正常检查为2倍该值 |
 | `connection_timeout` | `6` | 连接超时时间（秒）|
 | `debug_add_stopped` | `false` | 调试模式：新种子暂停添加 |
 
@@ -97,16 +98,31 @@ python run.py
             "url": "http://192.168.1.100:8080",
             "username": "admin",
             "password": "your_password",
-            "traffic_check_url": "http://192.168.1.100:8888/api/traffic",
-            "traffic_limit": 1024000
+            "traffic_check_url": "",
+            "traffic_limit": 0
+        },
+        {
+            "name": "qBittorrent-2", 
+            "url": "http://192.168.1.101:8080",
+            "username": "admin",
+            "password": "your_password",
+            "traffic_check_url": "",
+            "traffic_limit": 0
         }
     ],
     "webhook_port": 5000,
     "webhook_path": "/webhook/secure-a8f9c2e1-4b3d-9876-abcd-ef0123456789",
-    "primary_sort_key": "upload_speed",
     "max_new_tasks_per_instance": 2,
-    "debug_add_stopped": false
-}
+    "max_announce_retries": 30,
+    "fast_announce_interval": 4,
+    "reconnect_interval": 120,
+    "max_reconnect_attempts": 1,
+    "connection_timeout": 6,
+    "primary_sort_key": "upload_speed",
+    "log_dir": "./logs",
+    "debug_add_stopped": false,
+    "_comment": "注意，traffic_check_url需要配合其他工具使用，默认留空，不检查流量；traffic_limit 单位为MB"
+} 
 ```
 
 ## 安全说明

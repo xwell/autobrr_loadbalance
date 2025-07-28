@@ -49,7 +49,7 @@ check_config() {
             "username": "admin",
             "password": "your_password",
             "traffic_check_url": "",
-            "traffic_limit": 25165824
+            "traffic_limit": 0
         },
         {
             "name": "qBittorrent-2", 
@@ -57,13 +57,14 @@ check_config() {
             "username": "admin",
             "password": "your_password",
             "traffic_check_url": "",
-            "traffic_limit": 25165824
+            "traffic_limit": 0
         }
     ],
     "webhook_port": 5000,
     "webhook_path": "/webhook/secure-a8f9c2e1-4b3d-9876-abcd-ef0123456789",
     "max_new_tasks_per_instance": 2,
     "max_announce_retries": 30,
+    "fast_announce_interval": 4,
     "reconnect_interval": 120,
     "max_reconnect_attempts": 1,
     "connection_timeout": 6,

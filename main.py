@@ -154,7 +154,7 @@ class QBittorrentLoadBalancer:
     """qBittorrent负载均衡器"""
     
     def __init__(self, config_file: str = DEFAULT_CONFIG_FILE):
-        self.config = self._load_config(config_file)
+        self.config = self._load_config(config_file)        
         self.instances: List[InstanceInfo] = []
         self.pending_torrents: List[PendingTorrent] = []
         self.pending_torrents_lock = threading.Lock()
@@ -188,7 +188,8 @@ class QBittorrentLoadBalancer:
         """设置运行环境"""
         # 验证配置
         self._validate_config()
-        
+        # 设置配置默认值和验证
+        self._set_config_defaults()
         # 初始化qBittorrent实例
         self._init_instances()
         
@@ -216,7 +217,18 @@ class QBittorrentLoadBalancer:
         except json.JSONDecodeError:
             logger.error(f"配置文件格式错误：{config_file}")
             raise
-            
+    
+    def _set_config_defaults(self) -> None:
+        """设置配置默认值和验证"""
+        # 设置快速汇报间隔默认值，并限制在2-10秒范围内
+        fast_interval = self.config.get('fast_announce_interval', 4)
+        if not isinstance(fast_interval, (int, float)) or fast_interval < 2 or fast_interval > 10:
+            logger.warning(f"fast_announce_interval 值无效 ({fast_interval})，必须在2-10秒范围内，使用默认值4秒")
+            fast_interval = 4
+        self.config['fast_announce_interval'] = fast_interval
+        
+        logger.info(f"状态更新间隔配置：快速检查={fast_interval}秒，正常检查={fast_interval * 2}秒")
+
     def _init_instances(self) -> None:
         """初始化qBittorrent实例连接"""
         for instance_config in self.config['qbittorrent_instances']:
@@ -527,7 +539,10 @@ class QBittorrentLoadBalancer:
             logger.debug(f"汇报检查: {torrent.name} (第{current_retries}次检查，最大{max_retries}次)")
 
             # 检查是否达到1分钟或者2分钟且种子仍未完成，如果是则强制汇报
-            if (current_retries == 30 or current_retries == 60) and not is_completed:
+            fast_interval = self.config.get('fast_announce_interval', 4)
+            first_force_announce = int(60 / fast_interval)
+            second_force_announce = int(120 / fast_interval)
+            if (current_retries == first_force_announce or current_retries == second_force_announce) and not is_completed:
                 logger.info(f"达到特定次数({current_retries})且种子未完成，强制汇报: {torrent.name}")
                 self._announce_torrent(instance, torrent, torrent_hash, f"强制汇报(第{current_retries}次检查)")
                 continue
@@ -797,10 +812,11 @@ class QBittorrentLoadBalancer:
                 self._check_and_schedule_reconnects()
                               
                 # 根据是否有待重试的汇报任务来调整检查频率
+                fast_interval = self.config['fast_announce_interval']
                 if self.announce_retry_counts:
-                    time.sleep(2)  # 有待重试任务时加快检查频率
+                    time.sleep(fast_interval)  # 有待重试任务时的快速检查频率
                 else:
-                    time.sleep(4)  # 正常情况下的检查频率
+                    time.sleep(fast_interval * 2)  # 正常情况下的检查频率
                 
             except Exception as e:
                 logger.error(f"状态更新线程错误：{e}")
