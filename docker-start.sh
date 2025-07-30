@@ -23,7 +23,7 @@ check_docker() {
         exit 1
     fi
     
-    if ! command -v docker-compose &> /dev/null; then
+    if ! command -v docker compose &> /dev/null; then
         print_message "Docker Compose 未安装！请先安装 Docker Compose。" $RED
         exit 1
     fi
@@ -82,13 +82,13 @@ case "${1:-start}" in
         check_config
         build_image
         print_message "启动负载均衡器..." $GREEN
-        docker-compose up -d
+        docker compose up -d
         print_message "服务已启动！" $GREEN
         ;;
     
     "stop")
         print_message "停止服务..." $YELLOW
-        docker-compose down 2>/dev/null || true
+        docker compose down 2>/dev/null || true
         print_message "服务已停止！" $GREEN
         ;;
     
@@ -99,7 +99,7 @@ case "${1:-start}" in
         ;;
     
     "logs")
-        docker-compose logs -f qbittorrent-loadbalancer 2>/dev/null || \
+        docker compose logs -f qbittorrent-loadbalancer 2>/dev/null || \
         print_message "未找到运行中的服务" $RED
         ;;
     
