@@ -514,6 +514,10 @@ class QBittorrentLoadBalancer:
                    
     def _process_instance_announces(self, instance: InstanceInfo, maindata: dict) -> None:
         """处理实例的种子汇报检查"""
+        # 如果debug_add_stopped为True，直接返回，不做任何处理
+        if self.config.get('debug_add_stopped', False):
+            return
+
         max_retries = self.config.get('max_announce_retries', 12)
         error_keywords = ["unregistered", "not registered", "not found", "not exist"]
         current_time = datetime.now()
