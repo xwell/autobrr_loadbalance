@@ -86,6 +86,7 @@ python run.py
 | `traffic_check_url` | 流量检查 API URL |
 | `traffic_limit` | 流量限制（MB），超限实例会被跳过 |
 | `reserved_space` | 需要保留的空闲空间（MB），低于此值的实例会被跳过 |
+
 流量限制参数traffic_check_url和traffic_limit支持两种应用场景：
 1. 配套https://github.com/guowanghushifu/netcup-traffic-tester使用，traffic_limit 填2000000
 2. 配套https://github.com/guowanghushifu/vnstat-traffic-exporter使用，按需配置流量
