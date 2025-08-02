@@ -88,8 +88,8 @@ python run.py
 | `reserved_space` | 需要保留的空闲空间（MB），低于此值的实例会被跳过 |
 
 流量限制参数traffic_check_url和traffic_limit支持两种应用场景：
-1. 配套https://github.com/guowanghushifu/netcup-traffic-tester使用，traffic_limit 填2000000
-2. 配套https://github.com/guowanghushifu/vnstat-traffic-exporter使用，按需配置流量
+1. 配套`https://github.com/guowanghushifu/netcup-traffic-tester`使用，traffic_limit填2000000
+2. 配套`https://github.com/guowanghushifu/vnstat-traffic-exporter`使用，按需配置流量
 
 流量 API 需返回格式, in和out表示入站和出站流量，单位为MB：`{"in":1421.72,"out":11777.19,"start_date":"2025-07-19"}`
 
