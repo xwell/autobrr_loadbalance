@@ -484,6 +484,13 @@ class QBittorrentLoadBalancer:
             try:
                 traffic_out_mb = traffic_data.get('out', 0.0)
                 instance.traffic_out = int(float(traffic_out_mb) * 1024 * 1024)  # MB转字节
+                
+                # 检查是否流量被限流
+                traffic_throttled = traffic_data.get('trafficThrottled', False)
+                if traffic_throttled:
+                    instance.traffic_out = 999999999  # 设置为极大值，确保在流量检查时被过滤
+                    logger.warning(f"实例 {instance.name} 流量被限流，设置流量为极大值以避免被选择")
+                    
             except (ValueError, TypeError) as e:
                 logger.warning(f"实例 {instance.name} 流量数据转换失败：{e}，设置为0")
                 instance.traffic_out = 0
