@@ -800,7 +800,8 @@ class QBittorrentLoadBalancer:
                     if self._add_torrent_to_instance(instance, torrent):
                         self.pending_torrents.remove(torrent)
                 else:
-                    logger.warning("没有可用的实例来分配新任务")
+                    logger.warning("没有可用的实例来分配新任务，清空待处理队列")
+                    self.pending_torrents.clear()
                     break
 
     def _reset_task_counters(self) -> None:
