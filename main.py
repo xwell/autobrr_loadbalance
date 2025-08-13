@@ -32,6 +32,7 @@ CONNECTION_TIMEOUT = 10
 # 网络和存储常量
 BYTES_TO_KB = 1024
 BYTES_TO_GB = 1024 ** 3
+BYTES_TO_TB = 1024 ** 4
 MAX_RECONNECT_ATTEMPTS = 1
 
 # 种子汇报相关常量
@@ -488,7 +489,7 @@ class QBittorrentLoadBalancer:
                 # 检查是否流量被限流
                 traffic_throttled = traffic_data.get('trafficThrottled', False)
                 if traffic_throttled:
-                    instance.traffic_out = 999999999  # 设置为极大值，确保在流量检查时被过滤
+                    instance.traffic_out = 9999 * BYTES_TO_TB  # 设置为极大值，确保在流量检查时被过滤
                     logger.warning(f"实例 {instance.name} 流量被限流，设置流量为极大值以避免被选择")
                     
             except (ValueError, TypeError) as e:
