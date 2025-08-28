@@ -208,6 +208,31 @@ class QBittorrentLoadBalancer:
         else:
             logger.info(f"使用排序策略：主要因素={SUPPORTED_SORT_KEYS[primary_sort_key]}，次要因素=累计添加任务数，第三因素=空闲空间")
             
+        # 验证快速汇报分类黑名单配置
+        blacklist = self.config.get('fast_announce_category_blacklist')
+        if blacklist is not None:
+            if not isinstance(blacklist, list):
+                logger.warning(f"fast_announce_category_blacklist 配置格式错误，必须是数组，当前类型：{type(blacklist)}，已重置为空数组")
+                self.config['fast_announce_category_blacklist'] = []
+            else:
+                # 验证数组中的每个元素都是字符串
+                valid_blacklist = []
+                for item in blacklist:
+                    if isinstance(item, str):
+                        valid_blacklist.append(item)
+                    else:
+                        logger.warning(f"黑名单中包含非字符串项目：{item} (类型：{type(item)})，已忽略")
+                
+                self.config['fast_announce_category_blacklist'] = valid_blacklist
+                if valid_blacklist:
+                    logger.info(f"快速汇报分类黑名单已配置，包含 {len(valid_blacklist)} 个分类：{valid_blacklist}")
+                else:
+                    logger.info("快速汇报分类黑名单为空，所有分类都将执行快速汇报")
+        else:
+            # 如果没有配置黑名单，设置为空数组
+            self.config['fast_announce_category_blacklist'] = []
+            logger.info("未配置快速汇报分类黑名单，所有分类都将执行快速汇报")
+            
     def _load_config(self, config_file: str) -> dict:
         """加载配置文件"""
         try:
@@ -537,7 +562,7 @@ class QBittorrentLoadBalancer:
             is_completed = torrent.progress == 1.0
 
             # 条件1：如果种子已完成或添加超过2分钟，则确保其已从监控列表中移除，并跳过
-            if (is_completed and age_seconds > 60) or age_seconds > 130 or age_seconds < 2:
+            if (is_completed and age_seconds > 60) or age_seconds > 140 or age_seconds < 2:
                 if torrent_hash in self.announce_retry_counts:
                     del self.announce_retry_counts[torrent_hash]
                     if is_completed:
@@ -547,6 +572,15 @@ class QBittorrentLoadBalancer:
                     else:
                         reason = "添加时间小于2秒"
                     logger.debug(f"停止汇报监控: {torrent.name} (原因: {reason})")
+                continue
+                
+            # 检查种子分类是否在快速汇报黑名单中
+            blacklist = self.config.get('fast_announce_category_blacklist', [])
+            if blacklist and hasattr(torrent, 'category') and torrent.category in blacklist:
+                # 如果种子分类在黑名单中，从监控列表中移除并跳过
+                if torrent_hash in self.announce_retry_counts:
+                    del self.announce_retry_counts[torrent_hash]
+                    logger.debug(f"跳过快速汇报: {torrent.name} (分类 '{torrent.category}' 在黑名单中)")
                 continue
                 
             # 条件2：如果种子未完成且未超过2分钟，则进行汇报检查

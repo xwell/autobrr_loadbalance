@@ -30,5 +30,10 @@
     "primary_sort_key": "upload_speed",
     "log_dir": "./logs",
     "debug_add_stopped": false,
-    "_comment": "注意，traffic_check_url需要配合其他工具使用，默认留空，不检查流量；traffic_limit 和 reserved_space 单位为MB"
+    "fast_announce_category_blacklist": [
+        "Books",
+        "Software"
+    ],
+    "_comment": "注意，traffic_check_url需要配合其他工具使用，默认留空，不检查流量；traffic_limit 和 reserved_space 单位为MB",
+    "_comment_blacklist": "fast_announce_category_blacklist: 快速汇报分类黑名单，处于此列表中的种子分类不会触发快速汇报功能"
 }
