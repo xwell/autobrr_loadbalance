@@ -78,14 +78,28 @@ class WebhookServer:
             if not torrent_data:
                 return False
             
-            release_name, download_url, indexer, category = torrent_data
+            release_name, download_url, indexer, category, dl_limit, up_limit, savepath = torrent_data
             logger.info(f"接收到种子：{release_name} (来源：{indexer})")
+            
+            # 记录附加参数
+            extra_params = []
+            if dl_limit:
+                extra_params.append(f"下载限制={dl_limit}")
+            if up_limit:
+                extra_params.append(f"上传限制={up_limit}")
+            if savepath:
+                extra_params.append(f"保存路径={savepath}")
+            if extra_params:
+                logger.info(f"种子参数：{', '.join(extra_params)}")
             
             # 传递给负载均衡器处理
             self.torrent_manager.add_pending_torrent(
                 download_url=download_url,
                 release_name=release_name,
-                category=category or indexer
+                category=category or indexer,
+                dl_limit=dl_limit,
+                up_limit=up_limit,
+                savepath=savepath
             )
             return True
             
@@ -99,6 +113,9 @@ class WebhookServer:
         download_url = data.get('download_url', '')
         indexer = data.get('indexer', '')
         category = data.get('category', '')
+        dl_limit = data.get('dl_limit', data.get('dlLimit', None))  # 支持两种字段名
+        up_limit = data.get('up_limit', data.get('upLimit', None))  # 支持两种字段名
+        savepath = data.get('savepath', data.get('savePath', None))  # 支持两种字段名
         
         if not release_name:
             logger.error("webhook数据缺少种子名称")
@@ -108,7 +125,7 @@ class WebhookServer:
             logger.error("webhook数据缺少下载链接")
             return None
         
-        return release_name, download_url, indexer, category
+        return release_name, download_url, indexer, category, dl_limit, up_limit, savepath
     
 
     

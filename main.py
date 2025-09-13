@@ -11,6 +11,7 @@ import threading
 import logging
 import csv
 import requests
+import re
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from dataclasses import dataclass, field
@@ -48,6 +49,50 @@ DEFAULT_PRIMARY_SORT_KEY = 'upload_speed'
 
 # 创建一个简单的logger，避免在初始化之前输出日志
 logger = logging.getLogger(__name__)
+
+
+def parse_speed_limit(speed_str: str) -> Optional[str]:
+    """
+    解析速度限制字符串，支持多种格式
+    支持格式：50KB/s, 50KiB/s, 50MB/s, 50MiB/s, 100 K/s, 1024
+    返回：qBittorrent API 接受的格式字符串（bytes/second）
+    """
+    if not speed_str or not isinstance(speed_str, str):
+        return None
+        
+    # 移除空格并转换为小写
+    speed_str = speed_str.strip().lower()
+    
+    # 如果只包含数字，直接返回（假设为 bytes/second）
+    if speed_str.isdigit():
+        return speed_str
+    
+    # 解析带单位的速度字符串
+    # 支持格式：50kb/s, 50kib/s, 50mb/s, 50mib/s, 100 k/s
+    pattern = r'(\d+(?:\.\d+)?)\s*(kb|kib|mb|mib|gb|gib|k|m|g)?/s?'
+    match = re.match(pattern, speed_str)
+    
+    if match:
+        value = float(match.group(1))
+        unit = match.group(2) or ''
+        
+        # 转换为 bytes/second
+        if unit in ['kb', 'k', '']:
+            return str(int(value * 1024))  # KB/s -> bytes/s
+        elif unit in ['kib']:
+            return str(int(value * 1024))  # KiB/s -> bytes/s
+        elif unit in ['mb', 'm']:
+            return str(int(value * 1024 * 1024))  # MB/s -> bytes/s
+        elif unit in ['mib']:
+            return str(int(value * 1024 * 1024))  # MiB/s -> bytes/s
+        elif unit in ['gb', 'g']:
+            return str(int(value * 1024 * 1024 * 1024))  # GB/s -> bytes/s
+        elif unit in ['gib']:
+            return str(int(value * 1024 * 1024 * 1024))  # GiB/s -> bytes/s
+    
+    # 如果解析失败，返回原始字符串
+    logger.warning(f"无法解析速度限制字符串: {speed_str}")
+    return speed_str
 
 def setup_logging(log_dir=None):
     """设置日志配置，同时输出到控制台和文件"""
@@ -150,6 +195,9 @@ class PendingTorrent:
     download_url: str
     release_name: str
     category: Optional[str] = None
+    dl_limit: Optional[str] = None  # 下载速度限制 (支持带单位的字符串)
+    up_limit: Optional[str] = None  # 上传速度限制 (支持带单位的字符串)
+    savepath: Optional[str] = None  # 保存路径
 
 
 class QBittorrentLoadBalancer:
@@ -402,7 +450,8 @@ class QBittorrentLoadBalancer:
             logger.error(f"启动webhook服务器失败: {e}")
             raise
             
-    def add_pending_torrent(self, download_url: str, release_name: str, category: Optional[str] = None) -> None:
+    def add_pending_torrent(self, download_url: str, release_name: str, category: Optional[str] = None,
+                           dl_limit: Optional[str] = None, up_limit: Optional[str] = None, savepath: Optional[str] = None) -> None:
         """添加待处理的torrent"""
         if not download_url:
             logger.error("必须提供download_url")
@@ -421,10 +470,23 @@ class QBittorrentLoadBalancer:
                     torrent = PendingTorrent(
                         download_url=download_url,
                         release_name=release_name,
-                        category=category
+                        category=category,
+                        dl_limit=dl_limit,
+                        up_limit=up_limit,
+                        savepath=savepath
                     )
                     self.pending_torrents.append(torrent)
                     logger.info(f"添加待处理种子：{release_name}")
+                    # 记录附加参数信息
+                    if dl_limit or up_limit or savepath:
+                        extra_info = []
+                        if dl_limit:
+                            extra_info.append(f"下载限制={dl_limit}")
+                        if up_limit:
+                            extra_info.append(f"上传限制={up_limit}")
+                        if savepath:
+                            extra_info.append(f"保存路径={savepath}")
+                        logger.info(f"种子参数：{', '.join(extra_info)}")
                 else:
                     logger.debug(f"种子已在待处理列表中：{release_name}")
                     
@@ -798,6 +860,41 @@ class QBittorrentLoadBalancer:
             if torrent.category:
                 add_params['category'] = torrent.category
                 logger.info(f"为种子设置分类：{torrent.release_name} -> {torrent.category}")
+            
+            # 设置保存路径
+            if torrent.savepath:
+                add_params['save_path'] = torrent.savepath
+                logger.info(f"为种子设置保存路径：{torrent.release_name} -> {torrent.savepath}")
+            
+            # 设置下载速度限制
+            if torrent.dl_limit:
+                parsed_dl_limit = parse_speed_limit(torrent.dl_limit)
+                if parsed_dl_limit:
+                    add_params['download_limit'] = parsed_dl_limit
+                    # 将 bytes/s 转换为更易读的格式
+                    bytes_per_sec = int(parsed_dl_limit)
+                    if bytes_per_sec >= 1024 * 1024:
+                        readable_speed = f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
+                    elif bytes_per_sec >= 1024:
+                        readable_speed = f"{bytes_per_sec / 1024:.1f} KB/s"
+                    else:
+                        readable_speed = f"{bytes_per_sec} B/s"
+                    logger.info(f"为种子设置下载速度限制：{torrent.release_name} -> {torrent.dl_limit} ({readable_speed})")
+            
+            # 设置上传速度限制
+            if torrent.up_limit:
+                parsed_up_limit = parse_speed_limit(torrent.up_limit)
+                if parsed_up_limit:
+                    add_params['upload_limit'] = parsed_up_limit
+                    # 将 bytes/s 转换为更易读的格式
+                    bytes_per_sec = int(parsed_up_limit)
+                    if bytes_per_sec >= 1024 * 1024:
+                        readable_speed = f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
+                    elif bytes_per_sec >= 1024:
+                        readable_speed = f"{bytes_per_sec / 1024:.1f} KB/s"
+                    else:
+                        readable_speed = f"{bytes_per_sec} B/s"
+                    logger.info(f"为种子设置上传速度限制：{torrent.release_name} -> {torrent.up_limit} ({readable_speed})")
                 
             # 根据配置决定是否将种子添加为暂停状态（用于调试）
             if self.config.get('debug_add_stopped', False):
@@ -812,6 +909,15 @@ class QBittorrentLoadBalancer:
                 log_msg = f"成功添加种子到实例 {instance.name}：{torrent.release_name}"
                 if torrent.category:
                     log_msg += f"（分类：{torrent.category}）"
+                if torrent.savepath:
+                    log_msg += f"（保存路径：{torrent.savepath}）"
+                if torrent.dl_limit or torrent.up_limit:
+                    speed_info = []
+                    if torrent.dl_limit:
+                        speed_info.append(f"下载={torrent.dl_limit}")
+                    if torrent.up_limit:
+                        speed_info.append(f"上传={torrent.up_limit}")
+                    log_msg += f"（速度限制：{', '.join(speed_info)}）"
                 logger.info(log_msg)
                 return True
             else:
