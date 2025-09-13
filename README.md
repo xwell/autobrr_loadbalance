@@ -43,7 +43,11 @@ chmod +x docker-start.sh
 {
   "release_name": "{{.TorrentName}}",
   "indexer": "{{.Indexer}}",
-  "download_url": "{{.TorrentUrl}}"
+  "download_url": "{{.TorrentUrl}}",
+  "category": "TV",
+  "dl_limit": "5MB/s",
+  "up_limit": "1MB/s",
+  "savepath": "/downloads/TV"
 }
 ```
 图示：
